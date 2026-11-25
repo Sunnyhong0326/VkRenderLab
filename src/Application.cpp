@@ -17,6 +17,7 @@ namespace
 constexpr VkFormat baseFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr VkFormat normalFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+constexpr VkFormat screenFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr std::array gbufferFormats{baseFormat, normalFormat};
 constexpr VkShaderStageFlags geometryStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 constexpr auto colorUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -43,10 +44,10 @@ VkSampleCountFlagBits chooseGeometrySamples(VkPhysicalDevice device)
     return VK_SAMPLE_COUNT_1_BIT;
 }
 
-VkDescriptorSetLayout createSampledImageLayout(VkDevice device)
+VkDescriptorSetLayout createSampledImageLayout(VkDevice device, uint32_t imageCount, bool uniforms = false)
 {
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
-    for (uint32_t i = 0; i < bindings.size(); ++i)
+    std::vector<VkDescriptorSetLayoutBinding> bindings(imageCount);
+    for (uint32_t i = 0; i < imageCount; ++i)
     {
         bindings[i] = {
             .binding = i,
@@ -55,6 +56,8 @@ VkDescriptorSetLayout createSampledImageLayout(VkDevice device)
             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
         };
     }
+    if (uniforms)
+        bindings.push_back({imageCount, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT});
     const VkDescriptorSetLayoutCreateInfo info{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(bindings.size()),
@@ -82,10 +85,9 @@ VkSampler createSampler(VkDevice device, VkFilter filter, VkSamplerAddressMode a
     return sampler;
 }
 
-void writeImageSet(VkDevice device, VkDescriptorSet set,
-                   const std::array<VkDescriptorImageInfo, 3>& images)
+void writeImageSet(VkDevice device, VkDescriptorSet set, std::span<const VkDescriptorImageInfo> images)
 {
-    std::array<VkWriteDescriptorSet, 3> writes{};
+    std::vector<VkWriteDescriptorSet> writes(images.size());
     for (uint32_t i = 0; i < writes.size(); ++i)
     {
         writes[i] = {
@@ -133,14 +135,20 @@ Application::~Application()
     {
         vkDestroySemaphore(vk.device, frame.imageAvailable, nullptr);
         vkDestroyFence(vk.device, frame.finished, nullptr);
+        if (frame.mappedUniforms)
+            vkUnmapMemory(vk.device, frame.uniforms.memory);
     }
+    vkDestroyPipeline(vk.device, compositePipeline, nullptr);
+    vkDestroyPipeline(vk.device, lightingPipeline, nullptr);
+    vkDestroyPipeline(vk.device, shadowPipeline, nullptr);
     vkDestroyPipeline(vk.device, geometryPipeline, nullptr);
-    vkDestroyPipelineLayout(vk.device, lightingLayout, nullptr);
+    vkDestroyPipelineLayout(vk.device, effectsLayout, nullptr);
     vkDestroyPipelineLayout(vk.device, geometryLayout, nullptr);
     vkDestroyDescriptorPool(vk.device, descriptorPool, nullptr);
-    vkDestroyDescriptorSetLayout(vk.device, lightingSetLayout, nullptr);
+    vkDestroyDescriptorSetLayout(vk.device, effectsSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(vk.device, materialSetLayout, nullptr);
     vkDestroySampler(vk.device, attachmentSampler, nullptr);
+    vkDestroySampler(vk.device, screenSampler, nullptr);
     vkDestroySampler(vk.device, materialSampler, nullptr);
 }
 
@@ -193,15 +201,25 @@ void Application::initialize(const RunOptions& options)
     camera.pitch = glm::asin(forward.y);
     camera.speed = scene.radius * 0.25f;
     camera.farPlane = scene.radius * 8.0f;
+    sceneAreaLight = glm::vec4(scene.center + glm::vec3(0, scene.radius * 0.24f, 0),
+                               scene.radius * 0.10f);
 
     createFrames();
     uploadScene(scene);
     createDescriptors(scene);
     geometryLayout = createPipelineLayout(vk.device, materialSetLayout, geometryStages, sizeof(GeometryPush));
-    lightingLayout = createPipelineLayout(vk.device, lightingSetLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
-                                          sizeof(LightingPush));
+    effectsLayout = createPipelineLayout(vk.device, effectsSetLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
     geometryPipeline = createPipeline(vk.device, geometryLayout, "geometry.vert.spv", "geometry.frag.spv",
                                       gbufferFormats, depthFormat, geometrySamples);
+    shadowPipeline = createPipeline(vk.device, geometryLayout, "shadow.vert.spv", "shadow.frag.spv",
+                                    {}, depthFormat);
+    const bool multisampled = geometrySamples != VK_SAMPLE_COUNT_1_BIT;
+    lightingPipeline = createPipeline(vk.device, effectsLayout, "lighting.vert.spv",
+                                      multisampled ? "lighting_ms.frag.spv" : "lighting.frag.spv",
+                                      std::array{screenFormat});
+    compositePipeline = createPipeline(vk.device, effectsLayout, "lighting.vert.spv",
+                                       multisampled ? "composite_ms.frag.spv" : "composite.frag.spv",
+                                       std::array{screenFormat});
     initializeOverlay();
     createSwapchain();
 }
@@ -229,6 +247,11 @@ void Application::createFrames()
         checkVk(vkCreateFence(vk.device, &fenceInfo, nullptr, &frame.finished), "Create frame fence");
         checkVk(vkCreateSemaphore(vk.device, &semaphoreInfo, nullptr, &frame.imageAvailable),
                 "Create acquire semaphore");
+        vk.createBuffer(frame.uniforms, sizeof(EffectsUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        checkVk(vkMapMemory(vk.device, frame.uniforms.memory, 0, sizeof(EffectsUniforms), 0, &frame.mappedUniforms),
+                "Map frame uniforms");
+        vk.createImage(frame.shadowAtlas, shadowAtlasExtent, depthFormat, depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT);
     }
 }
 
@@ -251,20 +274,28 @@ void Application::createDescriptors(const Scene& scene)
 {
     materialSampler = createSampler(vk.device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT, true);
     attachmentSampler = createSampler(vk.device, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, false);
-    materialSetLayout = createSampledImageLayout(vk.device);
-    lightingSetLayout = createSampledImageLayout(vk.device);
+    screenSampler = createSampler(vk.device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, false);
+    constexpr uint32_t materialImageCount = 3;
+    constexpr uint32_t frameImageCount = 6;
+    materialSetLayout = createSampledImageLayout(vk.device, materialImageCount);
+    effectsSetLayout = createSampledImageLayout(vk.device, frameImageCount, true);
 
     const auto setCount = static_cast<uint32_t>(scene.materials.size() + frames.size());
-    const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, setCount * 3};
+    const std::array sizes{
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                             static_cast<uint32_t>(scene.materials.size() * materialImageCount +
+                                                   frames.size() * frameImageCount)},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(frames.size())},
+    };
     const VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .maxSets = setCount,
-        .poolSizeCount = 1,
-        .pPoolSizes = &size,
+        .poolSizeCount = static_cast<uint32_t>(sizes.size()),
+        .pPoolSizes = sizes.data(),
     };
     checkVk(vkCreateDescriptorPool(vk.device, &poolInfo, nullptr, &descriptorPool), "Create descriptor pool");
     std::vector<VkDescriptorSetLayout> layouts(scene.materials.size(), materialSetLayout);
-    layouts.resize(setCount, lightingSetLayout);
+    layouts.resize(setCount, effectsSetLayout);
     std::vector<VkDescriptorSet> sets(setCount);
     const VkDescriptorSetAllocateInfo allocate{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -274,18 +305,32 @@ void Application::createDescriptors(const Scene& scene)
     };
     checkVk(vkAllocateDescriptorSets(vk.device, &allocate, sets.data()), "Allocate descriptor sets");
     for (size_t i = 0; i < frames.size(); ++i)
-        frames[i].lightingSet = sets[scene.materials.size() + i];
+    {
+        auto& frame = frames[i];
+        frame.effectsSet = sets[scene.materials.size() + i];
+        const VkDescriptorBufferInfo buffer{frame.uniforms.handle, 0, sizeof(EffectsUniforms)};
+        const VkWriteDescriptorSet write{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = frame.effectsSet,
+            .dstBinding = frameImageCount,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = &buffer,
+        };
+        vkUpdateDescriptorSets(vk.device, 1, &write, 0, nullptr);
+    }
     sets.resize(scene.materials.size());
     materialSets = std::move(sets);
 
     for (size_t i = 0; i < scene.materials.size(); ++i)
     {
         const auto& material = scene.materials[i];
-        writeImageSet(vk.device, materialSets[i], {{
+        const std::array<VkDescriptorImageInfo, materialImageCount> images{{
             {materialSampler, textures[material.baseTexture].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {materialSampler, textures[material.surfaceTexture].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {materialSampler, textures[material.normalTexture].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        }});
+        }};
+        writeImageSet(vk.device, materialSets[i], images);
     }
 }
 
@@ -357,33 +402,37 @@ void Application::createSwapchain()
 
     for (auto& frame : frames)
     {
-        frame.gbuffer = std::make_unique<GBuffer>();
-        auto& gbuffer = *frame.gbuffer;
+        frame.images = std::make_unique<FrameImages>();
+        auto& gbuffer = *frame.images;
         vk.createImage(gbuffer.baseMetallic, extent, baseFormat, colorUsage,
                        VK_IMAGE_ASPECT_COLOR_BIT, geometrySamples);
         vk.createImage(gbuffer.normalRoughness, extent, normalFormat, colorUsage,
                        VK_IMAGE_ASPECT_COLOR_BIT, geometrySamples);
         vk.createImage(gbuffer.depth, extent, depthFormat, depthUsage,
                        VK_IMAGE_ASPECT_DEPTH_BIT, geometrySamples);
-        writeImageSet(vk.device, frame.lightingSet, {{
+        vk.createImage(gbuffer.litColor, extent, screenFormat, colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
+        vk.createImage(gbuffer.compositeColor, extent, screenFormat, colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
+        const std::array<VkDescriptorImageInfo, 6> descriptors{{
             {attachmentSampler, gbuffer.baseMetallic.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {attachmentSampler, gbuffer.normalRoughness.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             {attachmentSampler, gbuffer.depth.view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL},
-        }});
+            {attachmentSampler, frame.shadowAtlas.view, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL},
+            {screenSampler, gbuffer.litColor.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+            {screenSampler, gbuffer.compositeColor.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        }};
+        writeImageSet(vk.device, frame.effectsSet, descriptors);
     }
-    const auto lightingShader = geometrySamples == VK_SAMPLE_COUNT_1_BIT ? "lighting.frag.spv"
-                                                                         : "lighting_ms.frag.spv";
-    lightingPipeline = createPipeline(vk.device, lightingLayout, "lighting.vert.spv", lightingShader,
+    presentPipeline = createPipeline(vk.device, effectsLayout, "lighting.vert.spv", "present.frag.spv",
                                       std::array{surfaceFormat.format});
     configureOverlay(surfaceFormat.format);
 }
 
 void Application::destroySwapchain()
 {
-    vkDestroyPipeline(vk.device, lightingPipeline, nullptr);
-    lightingPipeline = VK_NULL_HANDLE;
+    vkDestroyPipeline(vk.device, presentPipeline, nullptr);
+    presentPipeline = VK_NULL_HANDLE;
     for (auto& frame : frames)
-        frame.gbuffer.reset();
+        frame.images.reset();
     for (const auto& image : swapImages)
     {
         vkDestroySemaphore(vk.device, image.renderFinished, nullptr);

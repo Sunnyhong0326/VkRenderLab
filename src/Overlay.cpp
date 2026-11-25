@@ -107,6 +107,16 @@ void Application::buildOverlay()
         ImGui::RadioButton("Depth", &debugView, 3);
         ImGui::SameLine();
         ImGui::RadioButton("Metallic / roughness", &debugView, 4);
+        if (ImGui::CollapsingHeader("Rasterization effects", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::CheckboxFlags("Ambient occlusion (SSAO)", &effects, ssao);
+            ImGui::CheckboxFlags("Point light shadows", &effects, pointShadows);
+            ImGui::CheckboxFlags("Reflections (SSR)", &effects, reflections);
+            ImGui::CheckboxFlags("Toon shading and outlines", &effects, toon);
+            ImGui::CheckboxFlags("FXAA", &effects, fxaa);
+            ImGui::CheckboxFlags("Area light", &effects, areaLighting);
+            ImGui::CheckboxFlags("Volumetric light", &effects, volumetricLighting);
+        }
     }
     ImGui::End();
     ImGui::Render();
