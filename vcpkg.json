@@ -1,0 +1,11 @@
+{
+  "name": "vk-render-lab",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "cgltf",
+    "glfw3",
+    "glm",
+    { "name": "imgui", "features": ["glfw-binding", "vulkan-binding"] },
+    "stb"
+  ]
+}
