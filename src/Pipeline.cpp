@@ -50,8 +50,8 @@ VkPipelineLayout createPipelineLayout(VkDevice device, VkDescriptorSetLayout set
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1,
         .pSetLayouts = &setLayout,
-        .pushConstantRangeCount = 1,
-        .pPushConstantRanges = &push,
+        .pushConstantRangeCount = pushSize ? 1u : 0u,
+        .pPushConstantRanges = pushSize ? &push : nullptr,
     };
     VkPipelineLayout layout = VK_NULL_HANDLE;
     checkVk(vkCreatePipelineLayout(device, &info, nullptr, &layout), "Create pipeline layout");
@@ -63,6 +63,7 @@ VkPipeline createPipeline(VkDevice device, VkPipelineLayout layout, std::string_
                           VkFormat depthFormat, VkSampleCountFlagBits sampleCount)
 {
     const bool geometry = depthFormat != VK_FORMAT_UNDEFINED;
+    const bool depthOnly = geometry && colorFormats.empty();
     const ShaderModule vertex(device, vertexShader);
     const ShaderModule fragment(device, fragmentShader);
     const std::array stages{
@@ -78,14 +79,14 @@ VkPipeline createPipeline(VkDevice device, VkPipelineLayout layout, std::string_
     const VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
     const std::array<VkVertexInputAttributeDescription, 3> attributes{{
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)},
-        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
         {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)},
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)},
     }};
     const VkPipelineVertexInputStateCreateInfo input{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .vertexBindingDescriptionCount = geometry ? 1u : 0u,
         .pVertexBindingDescriptions = geometry ? &binding : nullptr,
-        .vertexAttributeDescriptionCount = geometry ? static_cast<uint32_t>(attributes.size()) : 0,
+        .vertexAttributeDescriptionCount = depthOnly ? 2u : geometry ? 3u : 0u,
         .pVertexAttributeDescriptions = geometry ? attributes.data() : nullptr,
     };
     const VkPipelineInputAssemblyStateCreateInfo assembly{

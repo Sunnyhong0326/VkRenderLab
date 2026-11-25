@@ -44,17 +44,21 @@ You can also pass the path to another static triangle-mesh `.gltf` or `.glb` mod
 
 The **Renderer** overlay shows a live FPS plot. Select a **G-buffer view** in the overlay or press `1` through `5` to switch views.
 
+## Rasterization
+
+Use **Renderer → Rasterization effects** in the **Lit** view to switch each effect on or off. SSAO, point light shadows, and FXAA start enabled. Press `L` to toggle the camera-mounted point light, which supplies the point shadows and volumetric lighting. The practice scene has a reflective floor for testing SSR.
+
+| Feature | Implementation |
+| --- | --- |
+| Screen-space ambient occlusion (SSAO) | `ambientVisibility` samples nearby G-buffer depths and attenuates ambient light. [lighting.frag](shaders/lighting.frag) |
+| Point light shadows | `recordShadowPass` renders six views to a depth atlas. The shadow shaders honor material alpha cutoffs, and `pointVisibility` filters the atlas when shading surfaces. [Frame.cpp](src/Frame.cpp), [shadow.vert](shaders/shadow.vert), [shadow.frag](shaders/shadow.frag), [effects.glsl](shaders/effects.glsl) |
+| Screen-space reflections (SSR) | `screenReflection` marches reflected rays through the visible depth buffer and samples the lit image where they hit. [composite.frag](shaders/composite.frag) |
+| Non-photorealistic rendering | `shade` quantizes diffuse lighting. `toonOutline` detects depth and normal edges. [lighting.frag](shaders/lighting.frag), [composite.frag](shaders/composite.frag) |
+| Fast approximate anti-aliasing (FXAA) | `filterFXAA` smooths luminance edges in the composed image before ImGui is drawn. [present.frag](shaders/present.frag), [Frame.cpp](src/Frame.cpp) |
+| Area lights | `areaContribution` integrates four samples from a downward-facing rectangular emitter above the scene. [lighting.frag](shaders/lighting.frag), [Application.cpp](src/Application.cpp) |
+| Volumetric lighting | `scatterPointLight` integrates light and shadow along the camera ray through the point light's volume. [composite.frag](shaders/composite.frag) |
+
 ## TODO
-
-### Rasterization
-
-- [ ] Screen-space ambient occlusion (SSAO)
-- [ ] Point light shadows
-- [ ] Screen-space reflections (SSR)
-- [ ] Non-photorealistic rendering
-- [ ] Fast approximate anti-aliasing (FXAA)
-- [ ] Area lights
-- [ ] Volumetric lighting
 
 ### Hybrid rendering (ray tracing and rasterization)
 
@@ -69,10 +73,10 @@ The **Renderer** overlay shows a live FPS plot. Select a **G-buffer view** in th
 | Instance, device, staging uploads | [VulkanContext.cpp](src/VulkanContext.cpp) |
 | glTF vertices, indices, and material textures | [Scene.cpp](src/Scene.cpp) |
 | Swapchain, descriptors, and G-buffer images | [Application.cpp](src/Application.cpp) |
-| Acquire, geometry pass, lighting pass, and present | [Frame.cpp](src/Frame.cpp) |
+| Acquire, shadow, geometry, lighting, composition, and presentation passes | [Frame.cpp](src/Frame.cpp) |
 | Dynamic rendering pipeline setup | [Pipeline.cpp](src/Pipeline.cpp) |
 
-The renderer supports two frames in flight. It alternates between two frame slots and waits on each slot's fence before reusing it. Each slot has its own command buffer, acquire semaphore, G-buffer, and lighting descriptor set. Each swapchain image has its own presentation semaphore.
+The renderer supports two frames in flight. It waits on each slot's fence before reusing the slot's command buffer, acquire semaphore, uniform buffer, descriptor set, and render targets. Each swapchain image has its own presentation semaphore.
 
 The geometry pass writes base color and metallic, world-space normals and roughness, and depth. The lighting pass reconstructs the world-space position from depth and shades a fullscreen triangle with diffuse and specular lighting.
 

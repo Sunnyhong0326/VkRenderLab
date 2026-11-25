@@ -5,6 +5,7 @@
 #include <imgui_impl_vulkan.h>
 
 #include <array>
+#include <cstring>
 #include <limits>
 
 namespace
@@ -104,24 +105,119 @@ void Application::recordFrame(const Frame& frame, uint32_t imageIndex)
     };
     checkVk(vkBeginCommandBuffer(commands, &begin), "Begin frame command buffer");
 
-    const VkViewport viewport{0, 0, float(extent.width), float(extent.height), 0, 1};
-    const VkRect2D scissor{{0, 0}, extent};
-    vkCmdSetViewport(commands, 0, 1, &viewport);
-    vkCmdSetScissor(commands, 0, 1, &scissor);
     const glm::mat4 view = glm::lookAt(camera.eye, camera.eye + camera.forward(), glm::vec3(0, 1, 0));
     glm::mat4 projection = glm::perspective(glm::radians(62.0f), float(extent.width) / float(extent.height),
                                            camera.farPlane / 4000.0f, camera.farPlane);
     projection[1][1] *= -1.0f;
     const glm::mat4 viewProjection = projection * view;
+    const auto uniforms = makeEffectsUniforms(viewProjection);
+    std::memcpy(frame.mappedUniforms, &uniforms, sizeof(uniforms));
+
+    recordShadowPass(frame, uniforms);
+    const VkViewport viewport{0, 0, float(extent.width), float(extent.height), 0, 1};
+    const VkRect2D scissor{{0, 0}, extent};
+    vkCmdSetViewport(commands, 0, 1, &viewport);
+    vkCmdSetScissor(commands, 0, 1, &scissor);
     recordGeometryPass(frame, viewProjection);
-    recordLightingPass(frame, imageIndex, glm::inverse(viewProjection));
+    recordScreenPass(frame, frame.images->litColor, lightingPipeline);
+    recordScreenPass(frame, frame.images->compositeColor, compositePipeline);
+    recordPresentPass(frame, imageIndex);
     checkVk(vkEndCommandBuffer(commands), "End frame command buffer");
+}
+
+Application::EffectsUniforms Application::makeEffectsUniforms(const glm::mat4& viewProjection) const
+{
+    const glm::vec3 up(0, 1, 0);
+    const glm::vec3 right = glm::normalize(glm::cross(camera.forward(), up));
+    const float pointRadius = camera.farPlane * 0.16f;
+    const glm::vec3 point = camera.eye + (right * 0.12f + up * 0.04f) * pointRadius;
+    EffectsUniforms uniforms{
+        .viewProjection = viewProjection,
+        .inverseViewProjection = glm::inverse(viewProjection),
+        .eye = glm::vec4(camera.eye, 1.0f),
+        .pointLight = glm::vec4(point, pointRadius),
+        .areaLight = sceneAreaLight,
+        .settings = glm::ivec4(debugView, lightEnabled, effects, 0),
+    };
+    constexpr std::array<glm::vec3, 6> directions{{
+        {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1},
+    }};
+    constexpr std::array<glm::vec3, 6> faceUp{{
+        {0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0},
+    }};
+    const auto projection = glm::perspective(glm::radians(90.0f), 1.0f, pointRadius * 0.0125f, pointRadius);
+    for (size_t i = 0; i < directions.size(); ++i)
+        uniforms.shadowViewProjection[i] = projection * glm::lookAt(point, point + directions[i], faceUp[i]);
+    return uniforms;
+}
+
+void Application::recordShadowPass(const Frame& frame, const EffectsUniforms& uniforms)
+{
+    const auto commands = frame.commands;
+    const auto& atlas = frame.shadowAtlas;
+    const bool drawShadows = debugView == 0 && lightEnabled && (effects & pointShadows);
+    if (!drawShadows)
+    {
+        transitionImage(commands, atlas.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_NONE, 0, fragmentStage, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        return;
+    }
+    transitionImage(commands, atlas.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_NONE, 0, depthStages,
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    const auto depth = attachment(atlas.view, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                  VkClearValue{.depthStencil = {1.0f, 0}});
+    const VkRenderingInfo render{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea = {{0, 0}, shadowAtlasExtent},
+        .layerCount = 1,
+        .pDepthAttachment = &depth,
+    };
+    vkCmdBeginRendering(commands, &render);
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline);
+    for (uint32_t face = 0; face < uniforms.shadowViewProjection.size(); ++face)
+    {
+        const VkOffset2D offset{
+            static_cast<int32_t>(face % 3 * shadowFaceSize),
+            static_cast<int32_t>(face / 3 * shadowFaceSize),
+        };
+        const VkViewport viewport{float(offset.x), float(offset.y), float(shadowFaceSize),
+                                  float(shadowFaceSize), 0, 1};
+        const VkRect2D scissor{offset, {shadowFaceSize, shadowFaceSize}};
+        vkCmdSetViewport(commands, 0, 1, &viewport);
+        vkCmdSetScissor(commands, 0, 1, &scissor);
+        drawScene(commands, uniforms.shadowViewProjection[face]);
+    }
+    vkCmdEndRendering(commands);
+    transitionImage(commands, atlas.handle, VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
+                    depthStages, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    fragmentStage, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+}
+
+void Application::drawScene(VkCommandBuffer commands, const glm::mat4& viewProjection)
+{
+    const VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(commands, 0, 1, &vertices.handle, &offset);
+    vkCmdBindIndexBuffer(commands, indices.handle, 0, VK_INDEX_TYPE_UINT32);
+    for (const auto& primitive : primitives)
+    {
+        const auto& material = materials[primitive.material];
+        const GeometryPush push{viewProjection, material.baseColor, material.parameters};
+        vkCmdPushConstants(commands, geometryLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(push), &push);
+        vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, geometryLayout, 0, 1,
+                                &materialSets[primitive.material], 0, nullptr);
+        vkCmdDrawIndexed(commands, primitive.indexCount, 1, primitive.firstIndex, 0, 0);
+    }
 }
 
 void Application::recordGeometryPass(const Frame& frame, const glm::mat4& viewProjection)
 {
     const auto commands = frame.commands;
-    const auto& gbuffer = *frame.gbuffer;
+    const auto& gbuffer = *frame.images;
     const std::array colorImages{&gbuffer.baseMetallic, &gbuffer.normalRoughness};
     // The frame fence protects reuse. The next pass clears every attachment.
     for (const auto* image : colorImages)
@@ -151,19 +247,7 @@ void Application::recordGeometryPass(const Frame& frame, const glm::mat4& viewPr
     };
     vkCmdBeginRendering(commands, &render);
     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, geometryPipeline);
-    const VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(commands, 0, 1, &vertices.handle, &offset);
-    vkCmdBindIndexBuffer(commands, indices.handle, 0, VK_INDEX_TYPE_UINT32);
-    for (const auto& primitive : primitives)
-    {
-        const auto& material = materials[primitive.material];
-        const GeometryPush push{viewProjection, material.baseColor, material.parameters};
-        vkCmdPushConstants(commands, geometryLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(push), &push);
-        vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, geometryLayout, 0, 1,
-                                &materialSets[primitive.material], 0, nullptr);
-        vkCmdDrawIndexed(commands, primitive.indexCount, 1, primitive.firstIndex, 0, 0);
-    }
+    drawScene(commands, viewProjection);
     vkCmdEndRendering(commands);
 
     for (const auto* image : colorImages)
@@ -179,14 +263,35 @@ void Application::recordGeometryPass(const Frame& frame, const glm::mat4& viewPr
                     fragmentStage, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 }
 
-void Application::recordLightingPass(const Frame& frame, uint32_t imageIndex, const glm::mat4& inverseViewProjection)
+void Application::recordScreenPass(const Frame& frame, const Image& target, VkPipeline pipeline)
+{
+    transitionImage(frame.commands, target.handle, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_NONE, 0, colorStage, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    drawFullscreen(frame, target.view, pipeline, false);
+    transitionImage(frame.commands, target.handle, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    colorStage, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, fragmentStage, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+}
+
+void Application::recordPresentPass(const Frame& frame, uint32_t imageIndex)
 {
     const auto commands = frame.commands;
     const auto& image = swapImages[imageIndex];
     transitionImage(commands, image.image, VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     colorStage, 0, colorStage, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    const auto color = attachment(image.view, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, {});
+    drawFullscreen(frame, image.view, presentPipeline, true);
+    transitionImage(commands, image.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    colorStage, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0);
+}
+
+void Application::drawFullscreen(const Frame& frame, VkImageView target, VkPipeline pipeline, bool drawOverlay)
+{
+    const auto commands = frame.commands;
+    auto color = attachment(target, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, {});
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     const VkRenderingInfo render{
         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
         .renderArea = {{0, 0}, extent},
@@ -194,21 +299,12 @@ void Application::recordLightingPass(const Frame& frame, uint32_t imageIndex, co
         .colorAttachmentCount = 1,
         .pColorAttachments = &color,
     };
-    const LightingPush push{
-        inverseViewProjection,
-        glm::vec4(camera.eye, 1.0f),
-        glm::vec4(camera.eye + glm::vec3(0.0f, 0.2f, 0.0f), camera.farPlane * 0.16f),
-        glm::vec4(float(debugView), lightEnabled ? 1.0f : 0.0f, 0.0f, 0.0f),
-    };
     vkCmdBeginRendering(commands, &render);
-    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, lightingPipeline);
-    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, lightingLayout, 0, 1,
-                            &frame.lightingSet, 0, nullptr);
-    vkCmdPushConstants(commands, lightingLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, effectsLayout, 0, 1,
+                            &frame.effectsSet, 0, nullptr);
     vkCmdDraw(commands, 3, 1, 0, 0);
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commands);
+    if (drawOverlay)
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commands);
     vkCmdEndRendering(commands);
-    transitionImage(commands, image.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                    colorStage, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0);
 }

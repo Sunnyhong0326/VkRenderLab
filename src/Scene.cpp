@@ -187,6 +187,8 @@ Scene makePracticeScene()
     scene.materials[0].baseTexture = checker;
     Material floor;
     floor.baseColor = glm::vec4(0.4f, 0.43f, 0.48f, 1.0f);
+    floor.parameters.x = 0.25f;
+    floor.parameters.y = 0.28f;
     scene.materials.push_back(floor);
     Material card;
     card.parameters.z = 0.5f;

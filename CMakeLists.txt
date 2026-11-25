@@ -11,19 +11,24 @@ find_path(CGLTF_INCLUDE_DIR cgltf.h REQUIRED)
 find_program(GLSLC glslc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
 
 set(SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
-foreach(shader IN ITEMS geometry.vert geometry.frag lighting.vert lighting.frag lighting_ms.frag)
+foreach(shader IN ITEMS geometry.vert geometry.frag shadow.vert shadow.frag lighting.vert
+                        lighting.frag lighting_ms.frag composite.frag composite_ms.frag present.frag)
     set(source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${shader}")
     set(defines)
-    if(shader STREQUAL "lighting_ms.frag")
-        set(source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/lighting.frag")
+    if(shader MATCHES "^(.+)_ms[.]frag$")
+        set(source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${CMAKE_MATCH_1}.frag")
         set(defines -DMULTISAMPLED)
+    endif()
+    set(shader_dependencies "${source}")
+    if(shader MATCHES "^(lighting(_ms)?|composite(_ms)?|present)[.]frag$")
+        list(APPEND shader_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/shaders/effects.glsl")
     endif()
     set(output "${SHADER_DIR}/${shader}.spv")
     add_custom_command(
         OUTPUT "${output}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_DIR}"
         COMMAND "${GLSLC}" --target-env=vulkan1.3 ${defines} "${source}" -o "${output}"
-        DEPENDS "${source}"
+        DEPENDS ${shader_dependencies}
         VERBATIM
     )
     list(APPEND SHADER_OUTPUTS "${output}")
