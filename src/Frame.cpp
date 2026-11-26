@@ -2,7 +2,6 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/color_space.hpp>
-#include <glm/gtc/quaternion.hpp>
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 
@@ -107,7 +106,9 @@ void Application::recordFrame(const Frame& frame, uint32_t imageIndex)
     };
     checkVk(vkBeginCommandBuffer(commands, &begin), "Begin frame command buffer");
 
-    const glm::mat4 viewProjection = cameraViewProjection();
+    glm::mat4 projection = cameraProjection();
+    projection[1][1] *= -1.0f;
+    const glm::mat4 viewProjection = projection * cameraView();
     const auto uniforms = makeEffectsUniforms(viewProjection);
     std::memcpy(frame.mappedUniforms, &uniforms, sizeof(uniforms));
 
@@ -123,13 +124,15 @@ void Application::recordFrame(const Frame& frame, uint32_t imageIndex)
     checkVk(vkEndCommandBuffer(commands), "End frame command buffer");
 }
 
-glm::mat4 Application::cameraViewProjection() const
+glm::mat4 Application::cameraView() const
 {
-    const glm::mat4 view = glm::lookAt(camera.eye, camera.eye + camera.forward(), glm::vec3(0, 1, 0));
-    glm::mat4 projection = glm::perspective(glm::radians(62.0f), float(extent.width) / float(extent.height),
-                                           camera.farPlane / 4000.0f, camera.farPlane);
-    projection[1][1] *= -1.0f;
-    return projection * view;
+    return glm::lookAt(camera.eye, camera.eye + camera.forward(), glm::vec3(0, 1, 0));
+}
+
+glm::mat4 Application::cameraProjection() const
+{
+    return glm::perspective(glm::radians(62.0f), float(extent.width) / float(extent.height),
+                            camera.farPlane / 4000.0f, camera.farPlane);
 }
 
 Application::EffectsUniforms Application::makeEffectsUniforms(const glm::mat4& viewProjection) const
@@ -149,7 +152,7 @@ Application::EffectsUniforms Application::makeEffectsUniforms(const glm::mat4& v
             (light.type == LightType::area && !(effects & areaLighting)))
             continue;
         const int index = uniforms.lightCount++;
-        const glm::mat3 rotation = glm::mat3_cast(glm::quat(glm::radians(light.rotation)));
+        const glm::mat3 rotation = glm::mat3_cast(light.rotation);
         uniforms.lights[index] = {
             .positionExtent = glm::vec4(lightPosition(light), light.extent),
             .colorIntensity = glm::vec4(glm::convertSRGBToLinear(light.color), light.intensity),

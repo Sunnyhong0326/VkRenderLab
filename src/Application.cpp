@@ -226,8 +226,8 @@ void Application::initialize(const RunOptions& options)
 void Application::initializeLights(const Scene& scene)
 {
     const glm::vec3 sunDirection = glm::normalize(glm::vec3(0.55f, 1.0f, 0.35f));
-    const glm::vec3 sunRotation = glm::degrees(glm::vec3(glm::acos(sunDirection.y),
-                                                       glm::atan(sunDirection.x, sunDirection.z), 0.0f));
+    const glm::quat sunRotation(glm::vec3(glm::acos(sunDirection.y),
+                                         glm::atan(sunDirection.x, sunDirection.z), 0.0f));
     lights = {
         {.id = nextLightId++, .type = LightType::directional, .rotation = sunRotation, .intensity = 1.25f},
         {.id = nextLightId++, .type = LightType::point, .extent = camera.farPlane * 0.16f},
@@ -247,6 +247,11 @@ glm::vec3 Application::lightPosition(const Light& light) const
     const glm::vec3 up(0, 1, 0);
     const glm::vec3 right = glm::normalize(glm::cross(camera.forward(), up));
     return camera.eye + (right * 0.12f + up * 0.04f) * (camera.farPlane * 0.16f);
+}
+
+glm::vec3 Application::lightPlacementPosition() const
+{
+    return camera.eye + camera.forward() * (camera.farPlane * 0.06f);
 }
 
 void Application::createFrames()
@@ -517,7 +522,7 @@ void Application::updateCamera(float deltaTime)
     }
     lightKeyWasDown = lightKey;
 
-    const bool mouseDown = glfwGetMouseButton(handle, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS &&
+    const bool mouseDown = !draggingLightGizmo && glfwGetMouseButton(handle, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS &&
                            (looking || !ui.WantCaptureMouse);
     if (mouseDown != looking)
     {
@@ -535,7 +540,7 @@ void Application::updateCamera(float deltaTime)
         camera.pitch = glm::clamp(camera.pitch - delta.y * 0.0025f, -1.55f, 1.55f);
     }
 
-    if (ui.WantCaptureKeyboard)
+    if (ui.WantCaptureKeyboard || draggingLightGizmo)
         return;
 
     const glm::vec3 up(0.0f, 1.0f, 0.0f);

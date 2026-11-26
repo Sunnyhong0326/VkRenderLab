@@ -6,6 +6,7 @@ find_package(Vulkan REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(imguizmo CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_path(CGLTF_INCLUDE_DIR cgltf.h REQUIRED)
 find_program(GLSLC glslc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
@@ -53,4 +54,4 @@ target_compile_definitions(vk_render_lab PRIVATE
     MAX_SCENE_LIGHTS=${MAX_SCENE_LIGHTS}
 )
 target_include_directories(vk_render_lab SYSTEM PRIVATE "${CGLTF_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}")
-target_link_libraries(vk_render_lab PRIVATE Vulkan::Vulkan glfw glm::glm imgui::imgui)
+target_link_libraries(vk_render_lab PRIVATE Vulkan::Vulkan glfw glm::glm imgui::imgui imguizmo::imguizmo)

@@ -3,6 +3,8 @@
 #include "Scene.hpp"
 #include "VulkanContext.hpp"
 
+#include <glm/gtc/quaternion.hpp>
+
 #include <array>
 #include <cstddef>
 #include <deque>
@@ -87,12 +89,14 @@ private:
         uint32_t id;
         LightType type;
         glm::vec3 position{0.0f};
-        glm::vec3 rotation{0.0f};
+        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
         glm::vec3 color{1.0f};
         float intensity = 1.0f;
         float extent = 1.0f;
         bool enabled = true;
     };
+
+    enum class LightGizmoMode { move, rotate };
 
     struct alignas(16) LightUniform
     {
@@ -140,10 +144,13 @@ private:
     void configureOverlay(VkFormat format);
     void shutdownOverlay();
     void buildOverlay();
-    void buildLightEditor();
+    bool buildLightEditor();
+    void drawLightViewport(bool editSelectedLight);
     void initializeLights(const Scene& scene);
     glm::vec3 lightPosition(const Light& light) const;
-    glm::mat4 cameraViewProjection() const;
+    glm::vec3 lightPlacementPosition() const;
+    glm::mat4 cameraView() const;
+    glm::mat4 cameraProjection() const;
     void createDescriptors(const Scene& scene);
     void createSwapchain();
     void destroySwapchain();
@@ -203,6 +210,9 @@ private:
     uint32_t selectedLightId = 0;
     uint32_t shadowLightId = 0;
     uint32_t cameraLightId = 0;
+    LightGizmoMode lightGizmoMode = LightGizmoMode::move;
+    bool showLightPositions = true;
+    bool draggingLightGizmo = false;
     int effects = ssao | pointShadows | fxaa;
     glm::dvec2 previousCursor{};
     bool looking = false;

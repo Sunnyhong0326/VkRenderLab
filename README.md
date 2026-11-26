@@ -4,7 +4,7 @@ VkRenderLab is a Vulkan 1.3 deferred renderer. It draws a built-in practice scen
 
 ## Build and run on Windows
 
-Install Visual Studio Build Tools with the C++ workload, CMake, the Vulkan SDK, and vcpkg. Set `VCPKG_ROOT` to your vcpkg directory. CMake uses `vcpkg.json` to install dependencies, including Dear ImGui with the GLFW and Vulkan backends. CMake compiles GLSL to SPIR-V with the SDK's `glslc`.
+Install Visual Studio Build Tools with the C++ workload, CMake, the Vulkan SDK, and vcpkg. Set `VCPKG_ROOT` to your vcpkg directory. CMake uses `vcpkg.json` to install dependencies, including Dear ImGui with the GLFW and Vulkan backends, and ImGuizmo. CMake compiles GLSL to SPIR-V with the SDK's `glslc`.
 
 ```powershell
 cmake -S . -B build "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
@@ -14,7 +14,7 @@ cmake --build build --config Debug
 
 Use `--frames 8` to run a short rendering check. `--validate` enables the Khronos validation layer and synchronization validation. If the loader reports that the layer is missing and your SDK includes it, set `$env:VK_LAYER_PATH = Join-Path $env:VULKAN_SDK 'Bin'` before running.
 
-If you already have GLFW, GLM, stb, and `imgui[glfw-binding,vulkan-binding]` installed with vcpkg and a local copy of `cgltf.h`, you can use them without installing manifest dependencies. On this machine, use a fresh build directory with these options.
+If you already have GLFW, GLM, stb, `imgui[glfw-binding,vulkan-binding]`, and `imguizmo` installed with vcpkg and a local copy of `cgltf.h`, you can use them without installing manifest dependencies. On this machine, use a fresh build directory with these options.
 
 ```powershell
 cmake -S . -B build/local "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_MODE=OFF "-DCGLTF_INCLUDE_DIR=D:/Projects/VulkanLearning/nvpro_core2/third_party/cgltf"
@@ -48,13 +48,15 @@ The **Renderer** overlay shows a live FPS plot. Select a **G-buffer view** in th
 
 Open **Lights**, select **Add light**, and choose **Point**, **Area**, or **Directional**. Select a light in the dropdown to edit its color and intensity or remove it. You can add multiple lights of each type, up to 16 lights total.
 
+Use **Show light positions** or **Hide light positions** to toggle colored markers for every point and area light in view. The button does not change the lighting. Drag the selected light's arrows or rotation rings in the viewport.
+
 | Light type | Transform controls |
 | --- | --- |
-| Point | World position and radius. The light emits in every direction. |
-| Area | World position, rotation in degrees, and rectangle half-width. The light emits along its rotated local negative Y axis. |
-| Directional | Rotation in degrees. The light emits along its rotated local negative Y axis throughout the scene. |
+| Point | Drag the move gizmo to change world position. The light emits in every direction. |
+| Area | Select **Move** or **Rotate**, then drag the gizmo. The light emits along its local negative Y axis. |
+| Directional | Drag the rotation rings in front of the camera to change the light direction. A directional light has no world position. |
 
-Use **Place in front of camera** to move a point or area light to your current view. A colored ring marks the selected light's position when it is in view. Assign **Follow camera** to one point light. Turn it off to leave the light at its current world position.
+Use **Place in front of camera** to bring a point or area light into view. For a camera-mounted point light, this also turns off **Follow camera** so you can use the move gizmo.
 
 Select **Shadow and volume source** on one point light to use it for shadows and volumetric lighting. Toggle the effects in **Renderer**. Light edits apply to the current session.
 
