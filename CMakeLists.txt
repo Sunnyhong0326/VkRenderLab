@@ -9,28 +9,36 @@ find_package(imgui CONFIG REQUIRED)
 find_package(imguizmo CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_path(CGLTF_INCLUDE_DIR cgltf.h REQUIRED)
-find_program(GLSLC glslc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
+find_program(SLANGC slangc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
 
 set(MAX_SCENE_LIGHTS 16)
 set(SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 foreach(shader IN ITEMS geometry.vert geometry.frag shadow.vert shadow.frag lighting.vert
                         lighting.frag lighting_ms.frag composite.frag composite_ms.frag present.frag)
-    set(source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${shader}")
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${shader}.slang")
     set(defines)
     if(shader MATCHES "^(.+)_ms[.]frag$")
-        set(source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${CMAKE_MATCH_1}.frag")
+        set(source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${CMAKE_MATCH_1}.frag.slang")
         set(defines -DMULTISAMPLED)
     endif()
     set(shader_dependencies "${source}")
-    if(shader MATCHES "^(lighting(_ms)?|composite(_ms)?|present)[.]frag$")
-        list(APPEND shader_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/shaders/effects.glsl")
+    if(shader MATCHES "^(geometry|shadow)[.]")
+        list(APPEND shader_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/shaders/geometry_io.slang")
+    elseif(shader MATCHES "^(lighting|composite|present).*frag$")
+        list(APPEND shader_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/shaders/frame.slang")
+        if(NOT shader STREQUAL "present.frag")
+            list(APPEND shader_dependencies
+                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gbuffer.slang"
+                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/shadows.slang")
+        endif()
     endif()
     set(output "${SHADER_DIR}/${shader}.spv")
     add_custom_command(
         OUTPUT "${output}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_DIR}"
-        COMMAND "${GLSLC}" --target-env=vulkan1.3 -DMAX_SCENE_LIGHTS=${MAX_SCENE_LIGHTS}
-                ${defines} "${source}" -o "${output}"
+        COMMAND "${SLANGC}" "${source}" -entry main -target spirv -profile spirv_1_5
+                -matrix-layout-column-major -O2 -DMAX_SCENE_LIGHTS=${MAX_SCENE_LIGHTS}
+                ${defines} -o "${output}"
         DEPENDS ${shader_dependencies}
         VERBATIM
     )
