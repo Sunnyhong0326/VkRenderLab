@@ -1,13 +1,8 @@
-#version 450
+#include "frame.slang"
+#include "gbuffer.slang"
+#include "shadows.slang"
 
-#extension GL_GOOGLE_include_directive : require
-#define GBUFFER_SAMPLING
-#define SHADOW_SAMPLING
-#include "effects.glsl"
-
-layout(location = 0) out vec4 outputColor;
-
-float ambientVisibility(ivec2 pixel, ivec2 size, vec2 uv)
+float ambientVisibility(int2 pixel, int2 size, float2 uv)
 {
     if (!enabled(SSAO))
         return 1.0;
@@ -16,12 +11,11 @@ float ambientVisibility(ivec2 pixel, ivec2 size, vec2 uv)
     if (depth >= 1.0)
         return 1.0;
 
-    vec3 position = worldPositionAt(uv, depth);
-    vec3 normal = normalize(texelFetch(normalRoughnessTexture, pixel, sampleIndex).xyz);
+    float3 position = worldPositionAt(uv, depth);
+    float3 normal = normalize(loadGBuffer(normalRoughnessTexture, pixel, sampleIndex).xyz);
     float radius = frame.eyeSceneScale.w * 0.085;
-    float perspectiveDepth = (frame.viewProjection * vec4(position, 1.0)).w;
-    float projectionScale = length(vec3(frame.viewProjection[0].y, frame.viewProjection[1].y,
-                                        frame.viewProjection[2].y));
+    float perspectiveDepth = (mul(frame.viewProjection, float4(position, 1.0))).w;
+    float projectionScale = length(frame.viewProjection[1].xyz);
     float screenRadius = clamp(radius * projectionScale * float(size.y) * 0.5 / perspectiveDepth, 1.0, 56.0);
     float occlusion = 0.0;
     float rotation = float((pixel.x + 2 * pixel.y) % 4) * 1.5707963;
@@ -30,13 +24,13 @@ float ambientVisibility(ivec2 pixel, ivec2 size, vec2 uv)
     {
         float angle = rotation + float(i) * 2.3999632;
         float ring = sqrt((float(i) + 0.5) / float(tapCount));
-        ivec2 neighbor = pixel + ivec2(round(vec2(cos(angle), sin(angle)) * screenRadius * ring));
-        if (any(lessThan(neighbor, ivec2(0))) || any(greaterThanEqual(neighbor, size)))
+        int2 neighbor = pixel + int2(round(float2(cos(angle), sin(angle)) * screenRadius * ring));
+        if (any((neighbor < int2(0))) || any((neighbor >= size)))
             continue;
-        float neighborDepth = texelFetch(depthTexture, neighbor, 0).r;
+        float neighborDepth = loadGBuffer(depthTexture, neighbor, 0).r;
         if (neighborDepth >= 1.0)
             continue;
-        vec3 offset = worldPositionAt((vec2(neighbor) + 0.5) / vec2(size), neighborDepth) - position;
+        float3 offset = worldPositionAt((float2(neighbor) + 0.5) / float2(size), neighborDepth) - position;
         float distanceToSample = length(offset);
         float horizon = dot(normal, offset) / max(distanceToSample, 1e-5);
         occlusion += max(horizon - 0.12, 0.0) * (1.0 - smoothstep(0.0, radius, distanceToSample));
@@ -44,61 +38,61 @@ float ambientVisibility(ivec2 pixel, ivec2 size, vec2 uv)
     return 1.0 - clamp(2.4 * occlusion / float(tapCount), 0.0, 0.85);
 }
 
-vec3 shade(vec3 base, float metallic, float roughness, vec3 normal, vec3 view, vec3 light)
+float3 shade(float3 base, float metallic, float roughness, float3 normal, float3 view, float3 light)
 {
     float diffuse = max(dot(normal, light), 0.0);
     if (enabled(TOON))
         diffuse = floor(diffuse * 4.0 + 0.5) * 0.25;
-    vec3 halfway = normalize(light + view + vec3(1e-6));
-    float exponent = mix(128.0, 4.0, roughness);
+    float3 halfway = normalize(light + view + float3(1e-6));
+    float exponent = lerp(128.0, 4.0, roughness);
     float specular = pow(max(dot(normal, halfway), 0.0), exponent);
-    vec3 reflectance = mix(vec3(0.04), base, metallic);
+    float3 reflectance = lerp(float3(0.04), base, metallic);
     return diffuse * (base * (1.0 - metallic) + reflectance * specular);
 }
 
-vec3 pointContribution(SceneLight source, bool castsShadow, vec3 position, vec3 base, float metallic,
-                       float roughness, vec3 normal, vec3 view)
+float3 pointContribution(SceneLight source, bool castsShadow, float3 position, float3 base, float metallic,
+                       float roughness, float3 normal, float3 view)
 {
-    vec3 toLight = source.positionExtent.xyz - position;
+    float3 toLight = source.positionExtent.xyz - position;
     float distanceSquared = dot(toLight, toLight);
     float radius = source.positionExtent.w;
     float radiusSquared = radius * radius;
     if (radius <= 0.0 || distanceSquared >= radiusSquared)
-        return vec3(0.0);
+        return float3(0.0);
 
-    vec3 light = toLight * inversesqrt(max(distanceSquared, 1e-12));
+    float3 light = toLight * rsqrt(max(distanceSquared, 1e-12));
     float falloff = 1.0 - distanceSquared / radiusSquared;
     float visibility = castsShadow ? pointVisibility(position + light * radius * 0.001, true) : 1.0;
     return visibility * (falloff * falloff) * shade(base, metallic, roughness, normal, view, light);
 }
 
-vec3 areaContribution(SceneLight source, vec3 position, vec3 base, float metallic, float roughness,
-                      vec3 normal, vec3 view)
+float3 areaContribution(SceneLight source, float3 position, float3 base, float metallic, float roughness,
+                      float3 normal, float3 view)
 {
-    const vec2 taps[] = vec2[](vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0), vec2(1.0, 1.0));
-    vec2 halfSize = source.positionExtent.w * vec2(1.0, 0.62);
-    vec3 axisZ = cross(source.direction.xyz, source.axisX.xyz);
+    const float2 taps[4] = {float2(-1.0, -1.0), float2(1.0, -1.0), float2(-1.0, 1.0), float2(1.0, 1.0)};
+    float2 halfSize = source.positionExtent.w * float2(1.0, 0.62);
+    float3 axisZ = cross(source.direction.xyz, source.axisX.xyz);
     float area = 4.0 * halfSize.x * halfSize.y;
-    vec3 color = vec3(0.0);
-    for (int i = 0; i < taps.length(); ++i)
+    float3 color = float3(0.0);
+    for (int i = 0; i < taps.getCount(); ++i)
     {
-        vec2 offset = taps[i] * halfSize * 0.5773503;
-        vec3 toLight = source.positionExtent.xyz + source.axisX.xyz * offset.x + axisZ * offset.y - position;
+        float2 offset = taps[i] * halfSize * 0.5773503;
+        float3 toLight = source.positionExtent.xyz + source.axisX.xyz * offset.x + axisZ * offset.y - position;
         float distanceSquared = dot(toLight, toLight);
-        vec3 light = toLight * inversesqrt(max(distanceSquared, 1e-12));
+        float3 light = toLight * rsqrt(max(distanceSquared, 1e-12));
         float emitter = max(dot(-light, source.direction.xyz), 0.0) * area / (area + distanceSquared);
         color += emitter * shade(base, metallic, roughness, normal, view, light);
     }
-    return color * (2.4 / float(taps.length()));
+    return color * (2.4 / float(taps.getCount()));
 }
 
-vec3 directLighting(vec3 position, vec3 base, float metallic, float roughness, vec3 normal, vec3 view)
+float3 directLighting(float3 position, float3 base, float metallic, float roughness, float3 normal, float3 view)
 {
-    vec3 total = vec3(0.0);
+    float3 total = float3(0.0);
     for (int i = 0; i < frame.lightCount; ++i)
     {
         SceneLight source = frame.lights[i];
-        vec3 contribution;
+        float3 contribution;
         switch (source.type.x)
         {
             case DIRECTIONAL_LIGHT:
@@ -119,25 +113,25 @@ vec3 directLighting(vec3 position, vec3 base, float metallic, float roughness, v
     return total;
 }
 
-vec3 shadeSample(ivec2 pixel, vec2 uv, int sampleIndex, float ambient)
+float3 shadeSample(int2 pixel, float2 uv, int sampleIndex, float ambient)
 {
-    float depth = texelFetch(depthTexture, pixel, sampleIndex).r;
+    float depth = loadGBuffer(depthTexture, pixel, sampleIndex).r;
     if (depth >= 1.0)
-        return vec3(0.025, 0.035, 0.055);
+        return float3(0.025, 0.035, 0.055);
 
-    vec4 baseMetallic = texelFetch(baseMetallicTexture, pixel, sampleIndex);
-    vec4 normalRoughness = texelFetch(normalRoughnessTexture, pixel, sampleIndex);
-    vec3 normal = normalize(normalRoughness.xyz);
-    vec3 position = worldPositionAt(uv, depth);
-    vec3 view = normalize(frame.eyeSceneScale.xyz - position);
+    float4 baseMetallic = loadGBuffer(baseMetallicTexture, pixel, sampleIndex);
+    float4 normalRoughness = loadGBuffer(normalRoughnessTexture, pixel, sampleIndex);
+    float3 normal = normalize(normalRoughness.xyz);
+    float3 position = worldPositionAt(uv, depth);
+    float3 view = normalize(frame.eyeSceneScale.xyz - position);
     int mode = frame.debugView;
-    vec3 color;
+    float3 color;
     switch (mode)
     {
         case 1: color = baseMetallic.rgb; break;
         case 2: color = normal * 0.5 + 0.5; break;
-        case 3: color = vec3(1.0 - clamp(distance(position, frame.eyeSceneScale.xyz) / frame.eyeSceneScale.w, 0.0, 1.0)); break;
-        case 4: color = vec3(baseMetallic.a, normalRoughness.a, 0.0); break;
+        case 3: color = float3(1.0 - clamp(distance(position, frame.eyeSceneScale.xyz) / frame.eyeSceneScale.w, 0.0, 1.0)); break;
+        case 4: color = float3(baseMetallic.a, normalRoughness.a, 0.0); break;
         default:
             color = baseMetallic.rgb * (0.22 * ambient);
             color += directLighting(position, baseMetallic.rgb, baseMetallic.a, normalRoughness.a, normal, view);
@@ -147,15 +141,16 @@ vec3 shadeSample(ivec2 pixel, vec2 uv, int sampleIndex, float ambient)
     return color;
 }
 
-void main()
+[shader("fragment")]
+float4 main(float4 fragmentPosition : SV_Position) : SV_Target0
 {
-    ivec2 pixel = ivec2(gl_FragCoord.xy);
-    ivec2 size = gbufferSize();
-    vec2 uv = gl_FragCoord.xy / vec2(size);
+    int2 pixel = int2(fragmentPosition.xy);
+    int2 size = gbufferSize();
+    float2 uv = fragmentPosition.xy / float2(size);
     float ambient = ambientVisibility(pixel, size, uv);
     int sampleCount = gbufferSamples();
-    vec3 color = vec3(0.0);
+    float3 color = float3(0.0);
     for (int i = 0; i < sampleCount; ++i)
         color += shadeSample(pixel, uv, i, ambient);
-    outputColor = vec4(color / float(sampleCount), 1.0);
+    return float4(color / float(sampleCount), 1.0);
 }

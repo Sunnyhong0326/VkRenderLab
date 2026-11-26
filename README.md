@@ -4,7 +4,7 @@ VkRenderLab is a Vulkan 1.3 deferred renderer. It draws a built-in practice scen
 
 ## Build and run on Windows
 
-Install Visual Studio Build Tools with the C++ workload, CMake, the Vulkan SDK, and vcpkg. Set `VCPKG_ROOT` to your vcpkg directory. CMake uses `vcpkg.json` to install dependencies, including Dear ImGui with the GLFW and Vulkan backends, and ImGuizmo. CMake compiles GLSL to SPIR-V with the SDK's `glslc`.
+Install Visual Studio Build Tools with the C++ workload, CMake, the Vulkan SDK, and vcpkg. Set `VCPKG_ROOT` to your vcpkg directory. CMake uses `vcpkg.json` to install dependencies, including Dear ImGui with the GLFW and Vulkan backends, and ImGuizmo. CMake compiles Slang to SPIR-V with the SDK's `slangc`.
 
 ```powershell
 cmake -S . -B build "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
@@ -66,13 +66,13 @@ Use **Renderer → Rasterization effects** in the **Lit** view to switch each ef
 
 | Feature | Implementation |
 | --- | --- |
-| Screen-space ambient occlusion (SSAO) | `ambientVisibility` samples nearby G-buffer depths and attenuates ambient light. [lighting.frag](shaders/lighting.frag) |
-| Point light shadows | `recordShadowPass` renders six views to a depth atlas. The shadow shaders honor material alpha cutoffs, and `pointVisibility` filters the atlas when shading surfaces. [Frame.cpp](src/Frame.cpp), [shadow.vert](shaders/shadow.vert), [shadow.frag](shaders/shadow.frag), [effects.glsl](shaders/effects.glsl) |
-| Screen-space reflections (SSR) | `screenReflection` marches reflected rays through the visible depth buffer and samples the lit image where they hit. [composite.frag](shaders/composite.frag) |
-| Non-photorealistic rendering | `shade` quantizes diffuse lighting. `toonOutline` detects depth and normal edges. [lighting.frag](shaders/lighting.frag), [composite.frag](shaders/composite.frag) |
-| Fast approximate anti-aliasing (FXAA) | `filterFXAA` smooths luminance edges in the composed image before ImGui is drawn. [present.frag](shaders/present.frag), [Frame.cpp](src/Frame.cpp) |
-| Area lights | `areaContribution` integrates four samples across each rectangle in its edited orientation. [lighting.frag](shaders/lighting.frag), [Application.cpp](src/Application.cpp) |
-| Volumetric lighting | `scatterPointLight` integrates light and shadow along the camera ray through the point light's volume. [composite.frag](shaders/composite.frag) |
+| Screen-space ambient occlusion (SSAO) | `ambientVisibility` samples nearby G-buffer depths and attenuates ambient light. [lighting.frag.slang](shaders/lighting.frag.slang) |
+| Point light shadows | `recordShadowPass` renders six views to a depth atlas. The shadow shaders honor material alpha cutoffs, and `pointVisibility` filters the atlas when shading surfaces. [Frame.cpp](src/Frame.cpp), [shadow.vert.slang](shaders/shadow.vert.slang), [shadow.frag.slang](shaders/shadow.frag.slang), [shadows.slang](shaders/shadows.slang) |
+| Screen-space reflections (SSR) | `screenReflection` marches reflected rays through the visible depth buffer and samples the lit image where they hit. [composite.frag.slang](shaders/composite.frag.slang) |
+| Non-photorealistic rendering | `shade` quantizes diffuse lighting. `toonOutline` detects depth and normal edges. [lighting.frag.slang](shaders/lighting.frag.slang), [composite.frag.slang](shaders/composite.frag.slang) |
+| Fast approximate anti-aliasing (FXAA) | `filterFXAA` smooths luminance edges in the composed image before ImGui is drawn. [present.frag.slang](shaders/present.frag.slang), [Frame.cpp](src/Frame.cpp) |
+| Area lights | `areaContribution` integrates four samples across each rectangle in its edited orientation. [lighting.frag.slang](shaders/lighting.frag.slang), [Application.cpp](src/Application.cpp) |
+| Volumetric lighting | `scatterPointLight` integrates light and shadow along the camera ray through the point light's volume. [composite.frag.slang](shaders/composite.frag.slang) |
 
 ## TODO
 
