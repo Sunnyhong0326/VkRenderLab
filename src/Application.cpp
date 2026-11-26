@@ -201,8 +201,7 @@ void Application::initialize(const RunOptions& options)
     camera.pitch = glm::asin(forward.y);
     camera.speed = scene.radius * 0.25f;
     camera.farPlane = scene.radius * 8.0f;
-    sceneAreaLight = glm::vec4(scene.center + glm::vec3(0, scene.radius * 0.24f, 0),
-                               scene.radius * 0.10f);
+    initializeLights(scene);
 
     createFrames();
     uploadScene(scene);
@@ -222,6 +221,37 @@ void Application::initialize(const RunOptions& options)
                                        std::array{screenFormat});
     initializeOverlay();
     createSwapchain();
+}
+
+void Application::initializeLights(const Scene& scene)
+{
+    const glm::vec3 sunDirection = glm::normalize(glm::vec3(0.55f, 1.0f, 0.35f));
+    const glm::quat sunRotation(glm::vec3(glm::acos(sunDirection.y),
+                                         glm::atan(sunDirection.x, sunDirection.z), 0.0f));
+    lights = {
+        {.id = nextLightId++, .type = LightType::directional, .rotation = sunRotation, .intensity = 1.25f},
+        {.id = nextLightId++, .type = LightType::point, .extent = camera.farPlane * 0.16f},
+        {.id = nextLightId++, .type = LightType::area,
+         .position = scene.center + glm::vec3(0, scene.radius * 0.24f, 0),
+         .extent = scene.radius * 0.10f},
+    };
+    cameraLightId = lights[1].id;
+    shadowLightId = cameraLightId;
+    selectedLightId = cameraLightId;
+}
+
+glm::vec3 Application::lightPosition(const Light& light) const
+{
+    if (light.id != cameraLightId)
+        return light.position;
+    const glm::vec3 up(0, 1, 0);
+    const glm::vec3 right = glm::normalize(glm::cross(camera.forward(), up));
+    return camera.eye + (right * 0.12f + up * 0.04f) * (camera.farPlane * 0.16f);
+}
+
+glm::vec3 Application::lightPlacementPosition() const
+{
+    return camera.eye + camera.forward() * (camera.farPlane * 0.06f);
 }
 
 void Application::createFrames()
@@ -485,10 +515,14 @@ void Application::updateCamera(float deltaTime)
     }
     const bool lightKey = key(GLFW_KEY_L);
     if (!ui.WantCaptureKeyboard && lightKey && !lightKeyWasDown)
-        lightEnabled = !lightEnabled;
+    {
+        const auto mounted = std::ranges::find(lights, cameraLightId, &Light::id);
+        if (mounted != lights.end())
+            mounted->enabled = !mounted->enabled;
+    }
     lightKeyWasDown = lightKey;
 
-    const bool mouseDown = glfwGetMouseButton(handle, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS &&
+    const bool mouseDown = !draggingLightGizmo && glfwGetMouseButton(handle, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS &&
                            (looking || !ui.WantCaptureMouse);
     if (mouseDown != looking)
     {
@@ -506,7 +540,7 @@ void Application::updateCamera(float deltaTime)
         camera.pitch = glm::clamp(camera.pitch - delta.y * 0.0025f, -1.55f, 1.55f);
     }
 
-    if (ui.WantCaptureKeyboard)
+    if (ui.WantCaptureKeyboard || draggingLightGizmo)
         return;
 
     const glm::vec3 up(0.0f, 1.0f, 0.0f);

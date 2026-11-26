@@ -6,10 +6,12 @@ find_package(Vulkan REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(imguizmo CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_path(CGLTF_INCLUDE_DIR cgltf.h REQUIRED)
 find_program(GLSLC glslc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
 
+set(MAX_SCENE_LIGHTS 16)
 set(SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
 foreach(shader IN ITEMS geometry.vert geometry.frag shadow.vert shadow.frag lighting.vert
                         lighting.frag lighting_ms.frag composite.frag composite_ms.frag present.frag)
@@ -27,7 +29,8 @@ foreach(shader IN ITEMS geometry.vert geometry.frag shadow.vert shadow.frag ligh
     add_custom_command(
         OUTPUT "${output}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${SHADER_DIR}"
-        COMMAND "${GLSLC}" --target-env=vulkan1.3 ${defines} "${source}" -o "${output}"
+        COMMAND "${GLSLC}" --target-env=vulkan1.3 -DMAX_SCENE_LIGHTS=${MAX_SCENE_LIGHTS}
+                ${defines} "${source}" -o "${output}"
         DEPENDS ${shader_dependencies}
         VERBATIM
     )
@@ -48,6 +51,7 @@ add_dependencies(vk_render_lab compile_shaders)
 target_compile_features(vk_render_lab PRIVATE cxx_std_20)
 target_compile_definitions(vk_render_lab PRIVATE
     GLFW_INCLUDE_NONE GLM_FORCE_DEPTH_ZERO_TO_ONE VULKAN_SHADER_DIR="${SHADER_DIR}"
+    MAX_SCENE_LIGHTS=${MAX_SCENE_LIGHTS}
 )
 target_include_directories(vk_render_lab SYSTEM PRIVATE "${CGLTF_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}")
-target_link_libraries(vk_render_lab PRIVATE Vulkan::Vulkan glfw glm::glm imgui::imgui)
+target_link_libraries(vk_render_lab PRIVATE Vulkan::Vulkan glfw glm::glm imgui::imgui imguizmo::imguizmo)

@@ -1,6 +1,7 @@
 #include "Application.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/color_space.hpp>
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 
@@ -105,11 +106,9 @@ void Application::recordFrame(const Frame& frame, uint32_t imageIndex)
     };
     checkVk(vkBeginCommandBuffer(commands, &begin), "Begin frame command buffer");
 
-    const glm::mat4 view = glm::lookAt(camera.eye, camera.eye + camera.forward(), glm::vec3(0, 1, 0));
-    glm::mat4 projection = glm::perspective(glm::radians(62.0f), float(extent.width) / float(extent.height),
-                                           camera.farPlane / 4000.0f, camera.farPlane);
+    glm::mat4 projection = cameraProjection();
     projection[1][1] *= -1.0f;
-    const glm::mat4 viewProjection = projection * view;
+    const glm::mat4 viewProjection = projection * cameraView();
     const auto uniforms = makeEffectsUniforms(viewProjection);
     std::memcpy(frame.mappedUniforms, &uniforms, sizeof(uniforms));
 
@@ -125,20 +124,51 @@ void Application::recordFrame(const Frame& frame, uint32_t imageIndex)
     checkVk(vkEndCommandBuffer(commands), "End frame command buffer");
 }
 
+glm::mat4 Application::cameraView() const
+{
+    return glm::lookAt(camera.eye, camera.eye + camera.forward(), glm::vec3(0, 1, 0));
+}
+
+glm::mat4 Application::cameraProjection() const
+{
+    return glm::perspective(glm::radians(62.0f), float(extent.width) / float(extent.height),
+                            camera.farPlane / 4000.0f, camera.farPlane);
+}
+
 Application::EffectsUniforms Application::makeEffectsUniforms(const glm::mat4& viewProjection) const
 {
-    const glm::vec3 up(0, 1, 0);
-    const glm::vec3 right = glm::normalize(glm::cross(camera.forward(), up));
-    const float pointRadius = camera.farPlane * 0.16f;
-    const glm::vec3 point = camera.eye + (right * 0.12f + up * 0.04f) * pointRadius;
     EffectsUniforms uniforms{
         .viewProjection = viewProjection,
         .inverseViewProjection = glm::inverse(viewProjection),
-        .eye = glm::vec4(camera.eye, 1.0f),
-        .pointLight = glm::vec4(point, pointRadius),
-        .areaLight = sceneAreaLight,
-        .settings = glm::ivec4(debugView, lightEnabled, effects, 0),
+        .eyeSceneScale = glm::vec4(camera.eye, camera.farPlane * 0.16f),
+        .debugView = debugView,
+        .shadowLightIndex = -1,
+        .enabledEffects = effects,
+        .lightCount = 0,
     };
+    for (const Light& light : lights)
+    {
+        if (!light.enabled || light.intensity <= 0.0f ||
+            (light.type == LightType::area && !(effects & areaLighting)))
+            continue;
+        const int index = uniforms.lightCount++;
+        const glm::mat3 rotation = glm::mat3_cast(light.rotation);
+        uniforms.lights[index] = {
+            .positionExtent = glm::vec4(lightPosition(light), light.extent),
+            .colorIntensity = glm::vec4(glm::convertSRGBToLinear(light.color), light.intensity),
+            .direction = glm::vec4(-rotation[1], 0.0f),
+            .axisX = glm::vec4(rotation[0], 0.0f),
+            .type = glm::ivec4(static_cast<int>(light.type), 0, 0, 0),
+        };
+        if (light.type == LightType::point && light.id == shadowLightId)
+            uniforms.shadowLightIndex = index;
+    }
+    if (uniforms.shadowLightIndex < 0 || debugView != 0 || !(effects & pointShadows))
+        return uniforms;
+
+    const glm::vec4 positionExtent = uniforms.lights[uniforms.shadowLightIndex].positionExtent;
+    const glm::vec3 point(positionExtent);
+    const float pointRadius = positionExtent.w;
     constexpr std::array<glm::vec3, 6> directions{{
         {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1},
     }};
@@ -155,7 +185,8 @@ void Application::recordShadowPass(const Frame& frame, const EffectsUniforms& un
 {
     const auto commands = frame.commands;
     const auto& atlas = frame.shadowAtlas;
-    const bool drawShadows = debugView == 0 && lightEnabled && (effects & pointShadows);
+    const bool drawShadows = uniforms.shadowLightIndex >= 0 && uniforms.debugView == 0 &&
+                             (uniforms.enabledEffects & pointShadows);
     if (!drawShadows)
     {
         transitionImage(commands, atlas.handle, VK_IMAGE_ASPECT_DEPTH_BIT,

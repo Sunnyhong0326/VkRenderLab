@@ -16,11 +16,11 @@ bool reflectionDepth(vec3 position, ivec2 size, out vec2 uv, out float separatio
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0))))
         return false;
     float depth = texelFetch(depthTexture, ivec2(uv * vec2(size)), 0).r;
-    separation = -frame.pointLight.w;
+    separation = -frame.eyeSceneScale.w;
     if (depth < 1.0)
     {
         vec3 surface = worldPositionAt(uv, depth);
-        separation = length(position - frame.eye.xyz) - length(surface - frame.eye.xyz);
+        separation = length(position - frame.eyeSceneScale.xyz) - length(surface - frame.eyeSceneScale.xyz);
     }
     return true;
 }
@@ -29,9 +29,9 @@ vec3 screenReflection(vec3 color, vec3 position, vec3 normal, float metallic, fl
 {
     if (roughness >= 0.72)
         return color;
-    vec3 view = normalize(frame.eye.xyz - position);
+    vec3 view = normalize(frame.eyeSceneScale.xyz - position);
     vec3 direction = reflect(-view, normal);
-    float scale = frame.pointLight.w;
+    float scale = frame.eyeSceneScale.w;
     vec3 origin = position + normal * (0.0025 * scale);
     float maxDistance = scale * 0.75;
     float previousDistance = 0.0;
@@ -96,7 +96,7 @@ float toonOutline(ivec2 pixel, ivec2 size, vec3 normal, float surfaceDistance)
             return 1.0;
         vec3 neighborNormal = normalize(texelFetch(normalRoughnessTexture, neighbor, sampleIndex).xyz);
         vec3 world = worldPositionAt((vec2(neighbor) + 0.5) / vec2(size), depth);
-        float depthChange = abs(length(world - frame.eye.xyz) - surfaceDistance) / max(surfaceDistance, 1e-6);
+        float depthChange = abs(length(world - frame.eyeSceneScale.xyz) - surfaceDistance) / max(surfaceDistance, 1e-6);
         edge = max(edge, max(smoothstep(0.014, 0.04, depthChange),
                             smoothstep(0.16, 0.42, 1.0 - dot(neighborNormal, normal))));
     }
@@ -105,8 +105,9 @@ float toonOutline(ivec2 pixel, ivec2 size, vec3 normal, float surfaceDistance)
 
 vec3 scatterPointLight(vec3 color, vec3 direction, float surfaceDistance)
 {
-    float radius = frame.pointLight.w;
-    vec3 fromLight = frame.eye.xyz - frame.pointLight.xyz;
+    SceneLight light = frame.lights[frame.shadowLightIndex];
+    float radius = light.positionExtent.w;
+    vec3 fromLight = frame.eyeSceneScale.xyz - light.positionExtent.xyz;
     float alongRay = dot(fromLight, direction);
     float discriminant = alongRay * alongRay + radius * radius - dot(fromLight, fromLight);
     if (discriminant <= 0.0)
@@ -126,15 +127,16 @@ vec3 scatterPointLight(vec3 color, vec3 direction, float surfaceDistance)
     for (int i = 0; i < steps; ++i)
     {
         float distanceAlongRay = entry + (float(i) + 0.5) * stepLength;
-        vec3 position = frame.eye.xyz + direction * distanceAlongRay;
-        vec3 toLight = frame.pointLight.xyz - position;
+        vec3 position = frame.eyeSceneScale.xyz + direction * distanceAlongRay;
+        vec3 toLight = light.positionExtent.xyz - position;
         float distanceSquared = dot(toLight, toLight);
         float falloff = max(0.0, 1.0 - distanceSquared / (radius * radius));
         float visibility = pointVisibility(position, false);
         scattering += transmittance * (1.0 - stepTransmittance) * visibility * falloff * falloff;
         transmittance *= stepTransmittance;
     }
-    return color * transmittance + vec3(0.92, 0.86, 0.74) * scattering;
+    return color * transmittance + vec3(0.92, 0.86, 0.74) * light.colorIntensity.rgb *
+                                   (light.colorIntensity.a * scattering);
 }
 
 void main()
@@ -143,7 +145,7 @@ void main()
     vec3 color = texelFetch(litColor, pixel, 0).rgb;
     bool doReflections = enabled(REFLECTIONS);
     bool doOutline = enabled(TOON);
-    bool doVolume = enabled(VOLUMETRIC_LIGHT) && frame.settings.y != 0;
+    bool doVolume = enabled(VOLUMETRIC_LIGHT) && frame.shadowLightIndex >= 0;
     if (doReflections || doOutline || doVolume)
     {
         ivec2 size = gbufferSize();
@@ -151,7 +153,7 @@ void main()
         float depth;
         int sampleIndex = nearestSample(pixel, depth);
         vec3 position = worldPositionAt(uv, depth);
-        float surfaceDistance = length(position - frame.eye.xyz);
+        float surfaceDistance = length(position - frame.eyeSceneScale.xyz);
         if (depth < 1.0 && (doReflections || doOutline))
         {
             vec4 normalRoughness = texelFetch(normalRoughnessTexture, pixel, sampleIndex);
@@ -165,7 +167,7 @@ void main()
                 color *= 1.0 - 0.88 * toonOutline(pixel, size, normal, surfaceDistance);
         }
         if (doVolume)
-            color = scatterPointLight(color, normalize(position - frame.eye.xyz), surfaceDistance);
+            color = scatterPointLight(color, normalize(position - frame.eyeSceneScale.xyz), surfaceDistance);
     }
     outputColor = vec4(color, 1.0);
 }

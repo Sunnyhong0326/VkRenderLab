@@ -4,7 +4,7 @@ VkRenderLab is a Vulkan 1.3 deferred renderer. It draws a built-in practice scen
 
 ## Build and run on Windows
 
-Install Visual Studio Build Tools with the C++ workload, CMake, the Vulkan SDK, and vcpkg. Set `VCPKG_ROOT` to your vcpkg directory. CMake uses `vcpkg.json` to install dependencies, including Dear ImGui with the GLFW and Vulkan backends. CMake compiles GLSL to SPIR-V with the SDK's `glslc`.
+Install Visual Studio Build Tools with the C++ workload, CMake, the Vulkan SDK, and vcpkg. Set `VCPKG_ROOT` to your vcpkg directory. CMake uses `vcpkg.json` to install dependencies, including Dear ImGui with the GLFW and Vulkan backends, and ImGuizmo. CMake compiles GLSL to SPIR-V with the SDK's `glslc`.
 
 ```powershell
 cmake -S . -B build "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
@@ -14,7 +14,7 @@ cmake --build build --config Debug
 
 Use `--frames 8` to run a short rendering check. `--validate` enables the Khronos validation layer and synchronization validation. If the loader reports that the layer is missing and your SDK includes it, set `$env:VK_LAYER_PATH = Join-Path $env:VULKAN_SDK 'Bin'` before running.
 
-If you already have GLFW, GLM, stb, and `imgui[glfw-binding,vulkan-binding]` installed with vcpkg and a local copy of `cgltf.h`, you can use them without installing manifest dependencies. On this machine, use a fresh build directory with these options.
+If you already have GLFW, GLM, stb, `imgui[glfw-binding,vulkan-binding]`, and `imguizmo` installed with vcpkg and a local copy of `cgltf.h`, you can use them without installing manifest dependencies. On this machine, use a fresh build directory with these options.
 
 ```powershell
 cmake -S . -B build/local "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_MODE=OFF "-DCGLTF_INCLUDE_DIR=D:/Projects/VulkanLearning/nvpro_core2/third_party/cgltf"
@@ -44,9 +44,25 @@ You can also pass the path to another static triangle-mesh `.gltf` or `.glb` mod
 
 The **Renderer** overlay shows a live FPS plot. Select a **G-buffer view** in the overlay or press `1` through `5` to switch views.
 
+## Place and edit lights
+
+Open **Lights**, select **Add light**, and choose **Point**, **Area**, or **Directional**. Select a light in the dropdown to edit its color and intensity or remove it. You can add multiple lights of each type, up to 16 lights total.
+
+Use **Show light positions** or **Hide light positions** to toggle colored markers for every point and area light in view. The button does not change the lighting. Drag the selected light's arrows or rotation rings in the viewport.
+
+| Light type | Transform controls |
+| --- | --- |
+| Point | Drag the move gizmo to change world position. The light emits in every direction. |
+| Area | Select **Move** or **Rotate**, then drag the gizmo. The light emits along its local negative Y axis. |
+| Directional | Drag the rotation rings in front of the camera to change the light direction. A directional light has no world position. |
+
+Use **Place in front of camera** to bring a point or area light into view. For a camera-mounted point light, this also turns off **Follow camera** so you can use the move gizmo.
+
+Select **Shadow and volume source** on one point light to use it for shadows and volumetric lighting. Toggle the effects in **Renderer**. Light edits apply to the current session.
+
 ## Rasterization
 
-Use **Renderer → Rasterization effects** in the **Lit** view to switch each effect on or off. SSAO, point light shadows, and FXAA start enabled. Press `L` to toggle the camera-mounted point light, which supplies the point shadows and volumetric lighting. The practice scene has a reflective floor for testing SSR.
+Use **Renderer → Rasterization effects** in the **Lit** view to switch each effect on or off. SSAO, point light shadows, and FXAA start enabled. The camera-mounted point light starts as the shadow and volume source. The practice scene has a reflective floor for testing SSR.
 
 | Feature | Implementation |
 | --- | --- |
@@ -55,7 +71,7 @@ Use **Renderer → Rasterization effects** in the **Lit** view to switch each ef
 | Screen-space reflections (SSR) | `screenReflection` marches reflected rays through the visible depth buffer and samples the lit image where they hit. [composite.frag](shaders/composite.frag) |
 | Non-photorealistic rendering | `shade` quantizes diffuse lighting. `toonOutline` detects depth and normal edges. [lighting.frag](shaders/lighting.frag), [composite.frag](shaders/composite.frag) |
 | Fast approximate anti-aliasing (FXAA) | `filterFXAA` smooths luminance edges in the composed image before ImGui is drawn. [present.frag](shaders/present.frag), [Frame.cpp](src/Frame.cpp) |
-| Area lights | `areaContribution` integrates four samples from a downward-facing rectangular emitter above the scene. [lighting.frag](shaders/lighting.frag), [Application.cpp](src/Application.cpp) |
+| Area lights | `areaContribution` integrates four samples across each rectangle in its edited orientation. [lighting.frag](shaders/lighting.frag), [Application.cpp](src/Application.cpp) |
 | Volumetric lighting | `scatterPointLight` integrates light and shadow along the camera ray through the point light's volume. [composite.frag](shaders/composite.frag) |
 
 ## TODO
