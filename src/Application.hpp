@@ -4,6 +4,7 @@
 #include "VulkanContext.hpp"
 
 #include <array>
+#include <cstddef>
 #include <deque>
 #include <memory>
 
@@ -74,19 +75,50 @@ private:
         glm::vec4 material;
     };
 
-    struct EffectsUniforms
+    enum class LightType : int
+    {
+        directional = 0,
+        point = 1,
+        area = 2,
+    };
+
+    struct Light
+    {
+        uint32_t id;
+        LightType type;
+        glm::vec3 position{0.0f};
+        glm::vec3 rotation{0.0f};
+        glm::vec3 color{1.0f};
+        float intensity = 1.0f;
+        float extent = 1.0f;
+        bool enabled = true;
+    };
+
+    struct alignas(16) LightUniform
+    {
+        glm::vec4 positionExtent;
+        glm::vec4 colorIntensity;
+        glm::vec4 direction;
+        glm::vec4 axisX;
+        glm::ivec4 type;
+    };
+
+    struct alignas(16) EffectsUniforms
     {
         glm::mat4 viewProjection;
         glm::mat4 inverseViewProjection;
         std::array<glm::mat4, 6> shadowViewProjection;
-        glm::vec4 eye;
-        glm::vec4 pointLight;
-        glm::vec4 areaLight;
-        glm::ivec4 settings;
+        glm::vec4 eyeSceneScale;
+        int debugView;
+        int shadowLightIndex;
+        int enabledEffects;
+        int lightCount;
+        std::array<LightUniform, MAX_SCENE_LIGHTS> lights;
     };
 
     static_assert(sizeof(GeometryPush) == 96);
-    static_assert(sizeof(EffectsUniforms) == 576);
+    static_assert(sizeof(LightUniform) == 80);
+    static_assert(offsetof(EffectsUniforms, lights) == 544);
 
     enum Effect : int
     {
@@ -108,6 +140,10 @@ private:
     void configureOverlay(VkFormat format);
     void shutdownOverlay();
     void buildOverlay();
+    void buildLightEditor();
+    void initializeLights(const Scene& scene);
+    glm::vec3 lightPosition(const Light& light) const;
+    glm::mat4 cameraViewProjection() const;
     void createDescriptors(const Scene& scene);
     void createSwapchain();
     void destroySwapchain();
@@ -162,12 +198,15 @@ private:
     float fpsSampleTime = 0.0f;
 
     Camera camera;
-    glm::vec4 sceneAreaLight{};
+    std::vector<Light> lights;
+    uint32_t nextLightId = 1;
+    uint32_t selectedLightId = 0;
+    uint32_t shadowLightId = 0;
+    uint32_t cameraLightId = 0;
     int effects = ssao | pointShadows | fxaa;
     glm::dvec2 previousCursor{};
     bool looking = false;
     bool resized = false;
-    bool lightEnabled = true;
     bool lightKeyWasDown = false;
     int debugView = 0;
 };

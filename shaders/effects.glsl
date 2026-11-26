@@ -1,24 +1,36 @@
+struct SceneLight {
+    vec4 positionExtent;
+    vec4 colorIntensity;
+    vec4 direction;
+    vec4 axisX;
+    ivec4 type;
+};
+
 layout(std140, set = 0, binding = 6) uniform Effects {
     mat4 viewProjection;
     mat4 inverseViewProjection;
     mat4 shadowViewProjection[6];
-    vec4 eye;
-    vec4 pointLight;
-    vec4 areaLight;
-    ivec4 settings;
+    vec4 eyeSceneScale;
+    int debugView;
+    int shadowLightIndex;
+    int enabledEffects;
+    int lightCount;
+    SceneLight lights[MAX_SCENE_LIGHTS];
 } frame;
 
+const int DIRECTIONAL_LIGHT = 0;
+const int POINT_LIGHT = 1;
+const int RECTANGLE_LIGHT = 2;
 const int SSAO = 1 << 0;
 const int POINT_SHADOWS = 1 << 1;
 const int REFLECTIONS = 1 << 2;
 const int TOON = 1 << 3;
 const int FXAA = 1 << 4;
-const int AREA_LIGHT = 1 << 5;
 const int VOLUMETRIC_LIGHT = 1 << 6;
 
 bool enabled(int effect)
 {
-    return frame.settings.x == 0 && (frame.settings.z & effect) != 0;
+    return frame.debugView == 0 && (frame.enabledEffects & effect) != 0;
 }
 
 vec3 worldPositionAt(vec2 uv, float depth)
@@ -88,9 +100,9 @@ int shadowFace(vec3 direction)
 
 float pointVisibility(vec3 position, bool filterShadow)
 {
-    if (!enabled(POINT_SHADOWS))
+    if (frame.shadowLightIndex < 0 || !enabled(POINT_SHADOWS))
         return 1.0;
-    int face = shadowFace(position - frame.pointLight.xyz);
+    int face = shadowFace(position - frame.lights[frame.shadowLightIndex].positionExtent.xyz);
     vec4 clip = frame.shadowViewProjection[face] * vec4(position, 1.0);
     if (clip.w <= 0.0)
         return 1.0;

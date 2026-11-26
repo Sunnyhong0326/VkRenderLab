@@ -44,9 +44,23 @@ You can also pass the path to another static triangle-mesh `.gltf` or `.glb` mod
 
 The **Renderer** overlay shows a live FPS plot. Select a **G-buffer view** in the overlay or press `1` through `5` to switch views.
 
+## Place and edit lights
+
+Open **Lights**, select **Add light**, and choose **Point**, **Area**, or **Directional**. Select a light in the dropdown to edit its color and intensity or remove it. You can add multiple lights of each type, up to 16 lights total.
+
+| Light type | Transform controls |
+| --- | --- |
+| Point | World position and radius. The light emits in every direction. |
+| Area | World position, rotation in degrees, and rectangle half-width. The light emits along its rotated local negative Y axis. |
+| Directional | Rotation in degrees. The light emits along its rotated local negative Y axis throughout the scene. |
+
+Use **Place in front of camera** to move a point or area light to your current view. A colored ring marks the selected light's position when it is in view. Assign **Follow camera** to one point light. Turn it off to leave the light at its current world position.
+
+Select **Shadow and volume source** on one point light to use it for shadows and volumetric lighting. Toggle the effects in **Renderer**. Light edits apply to the current session.
+
 ## Rasterization
 
-Use **Renderer → Rasterization effects** in the **Lit** view to switch each effect on or off. SSAO, point light shadows, and FXAA start enabled. Press `L` to toggle the camera-mounted point light, which supplies the point shadows and volumetric lighting. The practice scene has a reflective floor for testing SSR.
+Use **Renderer → Rasterization effects** in the **Lit** view to switch each effect on or off. SSAO, point light shadows, and FXAA start enabled. The camera-mounted point light starts as the shadow and volume source. The practice scene has a reflective floor for testing SSR.
 
 | Feature | Implementation |
 | --- | --- |
@@ -55,7 +69,7 @@ Use **Renderer → Rasterization effects** in the **Lit** view to switch each ef
 | Screen-space reflections (SSR) | `screenReflection` marches reflected rays through the visible depth buffer and samples the lit image where they hit. [composite.frag](shaders/composite.frag) |
 | Non-photorealistic rendering | `shade` quantizes diffuse lighting. `toonOutline` detects depth and normal edges. [lighting.frag](shaders/lighting.frag), [composite.frag](shaders/composite.frag) |
 | Fast approximate anti-aliasing (FXAA) | `filterFXAA` smooths luminance edges in the composed image before ImGui is drawn. [present.frag](shaders/present.frag), [Frame.cpp](src/Frame.cpp) |
-| Area lights | `areaContribution` integrates four samples from a downward-facing rectangular emitter above the scene. [lighting.frag](shaders/lighting.frag), [Application.cpp](src/Application.cpp) |
+| Area lights | `areaContribution` integrates four samples across each rectangle in its edited orientation. [lighting.frag](shaders/lighting.frag), [Application.cpp](src/Application.cpp) |
 | Volumetric lighting | `scatterPointLight` integrates light and shadow along the camera ray through the point light's volume. [composite.frag](shaders/composite.frag) |
 
 ## TODO
